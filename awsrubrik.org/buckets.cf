@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Resources:
+  RubrikSNSTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      Subscription:
+      - Endpoint: 'mil9186@nyp.org'
+        Protocol: email
+      TopicName: 'cf-rubrik-topic'
+  RubrikSNSTopicPolicy:
+    Type: 'AWS::SNS::TopicPolicy'
+    DependsOn: RubrikSNSTopic
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AWSS3BucketSNSPolicy
+          Effect: Allow
+          Principal:
+            AWS: '*'
+          Resource: !Ref RubrikSNSTopic
+          Action: SNS:Publish
+      Topics:
+      - !Ref RubrikSNSTopic
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    DependsOn: RubrikSNSTopic
+    DependsOn: S3LogBucket
+    Properties:
+      BucketName: 'cf-rubrik-bucket'
+      AccessControl: Private
+
+      LifecycleConfiguration:
+        Rules:
+        - Id: ExpiredRule
+          Status: Enabled
+          ExpirationInDays: '60'
+
+      LoggingConfiguration:
+          DestinationBucketName:  !Ref 'S3LogBucket'
+          LogFilePrefix: 'RubrikLog'
+
+      NotificationConfiguration:
+          TopicConfigurations:
+          - Topic: !Ref 'RubrikSNSTopic'
+            Event: 's3:ObjectCreated:*'
+
+
+  S3LogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: 'cf-rubrik-log-bucket'
+      AccessControl: LogDeliveryWrite
+
+
+
+
+Outputs:
+  BucketName:
+    Value: !Ref 'S3Bucket'
+    Description: Name of the sample Amazon S3 bucket with a lifecycle configuration.

@@ -1,0 +1,5 @@
+#returns connection string for a storage account used in other calls
+az storage account show-connection-string --name tfstorageaccount --resource-group tf-blob-test-group
+
+#upload a file to a storage container
+az storage blob upload --file main.tf --container-name tf-blob-test-container --name main.tf --connection-string "DefaultEndpointsProtocol=https;EndpointSuffix=core.windows.net;AccountName=tfstorageaccount;AccountKey=Ik1qN9VCijB4hvWlScv5OiaHJrK7TxSdMlXcRhJ/mP8K0pExGQmBYpRvXIpwpyKEBX14ijkuAxrexuok9nqe4Q=="
