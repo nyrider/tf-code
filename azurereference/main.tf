@@ -279,3 +279,4 @@ resource "azurerm_virtual_machine_scale_set" "tf-test-vmscaleset" {
     version   = "latest"
   }
 }
+# ========= VM Scale Set =========================================
