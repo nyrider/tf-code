@@ -63,6 +63,7 @@ resource "azurerm_public_ip" "tf-test-bh-pub-ip" {
   location                     = "${azurerm_resource_group.tf-test-group.location}"
   resource_group_name          = "${azurerm_resource_group.tf-test-group.name}"
   public_ip_address_allocation = "static"
+  domain_name_label            = "tftestbh"
 }
 
 resource "azurerm_public_ip" "tf-test-lb-pub-ip" {
@@ -70,6 +71,7 @@ resource "azurerm_public_ip" "tf-test-lb-pub-ip" {
   location                     = "${azurerm_resource_group.tf-test-group.location}"
   resource_group_name          = "${azurerm_resource_group.tf-test-group.name}"
   public_ip_address_allocation = "static"
+  domain_name_label            = "tftestnginxlb"
 }
 # =============End Public IP Addresses ===========================
 
@@ -280,3 +282,7 @@ resource "azurerm_virtual_machine_scale_set" "tf-test-vmscaleset" {
   }
 }
 # ========= VM Scale Set =========================================
+
+output "address" {
+  value = "${element(azurerm_virtual_machine_scale_set.tf-test-vmscaleset.*.private_ip_address,0)}"
+}
