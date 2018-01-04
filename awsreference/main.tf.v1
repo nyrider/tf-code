@@ -1,0 +1,55 @@
+provider "aws" {
+  region                  = "${var.region}"
+  shared_credentials_file = "~/.aws/credentials"
+  profile                 = "default"
+}
+
+
+module "tf-ref-vpc" {
+  source = "github.com/azavea/terraform-aws-vpc"
+  name = "tf-ref-vpc"
+  key_name = "tf-test-east1"
+  bastion_ami = "ami-55ef662f"
+  region = "${var.region}"
+  availability_zones = ["us-east-1b","us-east-1c" ]
+}
+
+
+resource "aws_instance" "wf1" {
+  ami           = "${var.ami}"
+  instance_type = "m4.large"
+  subnet_id     = "${module.tf-ref-vpc.private_subnet_ids[0]}"
+  associate_public_ip_address = true
+  security_groups = ["${aws_security_group.RDPBastion.id}","${aws_security_group.allow_all_outbound.id}"]
+  tags {
+    Name = "${var.namePrefix}-wf1"
+  }
+}
+
+# Security Groups ------------------------
+resource "aws_security_group" "allow_all_outbound" {
+    name = "${var.namePrefix}-all-outbound"
+    description = "Allow all outbound traffic"
+    vpc_id = "${module.tf-ref-vpc.id}"
+
+    egress = {
+        from_port = 0
+        to_port = 0
+        protocol = "-1"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+}
+
+resource "aws_security_group" "RDPBastion" {
+    name = "${var.namePrefix}-RDP from Bastion"
+    description = "Allow RDP traffic from bastion"
+    vpc_id = "${module.tf-ref-vpc.id}"
+
+    ingress = {
+        from_port = 3389
+        to_port = 3389
+        protocol = "tcp"
+#        cidr_blocks = ["${module.tf-ref-vpc.cidr_block}"]
+        security_groups =["${module.tf-ref-vpc.bastion_security_group_id}"]
+    }
+}
