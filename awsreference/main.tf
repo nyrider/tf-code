@@ -4,11 +4,18 @@ provider "aws" {
   profile                 = "default"
 }
 
+# EIPs for NATs-----------------
+# resource "aws_eip" "nat" {
+#   count = 2
+#   vpc = true
+# }
+# End EIPs for NATs--------------
+
 
 # VPC ----------------
 module "vpc" {
 #    source = "../modules/tf_aws_vpc"
-   source = "github.com/terraform-community-modules/tf_aws_vpc"
+   source = "github.com/terraform-aws-modules/terraform-aws-vpc.git" # "github.com/terraform-community-modules/tf_aws_vpc"
    name = "${var.namePrefix}-vpc"
    cidr = "10.0.0.0/22"
    public_subnets  = ["10.0.0.0/26","10.0.0.64/26"]
@@ -17,6 +24,8 @@ module "vpc" {
    enable_dns_support = true
    enable_dns_hostnames = true
    enable_nat_gateway = true
+   single_nat_gateway  = false
+#   external_nat_ip_ids = ["${aws_eip.nat.*.id}"]
    tags {
      Name = "${var.namePrefix}-vpc"
      project = "${var.project}"
@@ -137,3 +146,37 @@ resource "aws_instance" "wf1" {
   }
 }
 # End WorkFusion Instance ------------------------
+
+# Cloudwatch Alarm to stop instance after idle period -------------
+resource "aws_cloudwatch_metric_alarm" "foobar" {
+  alarm_name                = "tf-nyp-useast1-stop after idle"
+  comparison_operator       = "LessThanOrEqualToThreshold"
+  evaluation_periods        = "3"
+  metric_name               = "CPUUtilization"
+  namespace                 = "AWS/EC2"
+  period                    = "300"
+  statistic                 = "Average"
+  threshold                 = "5"
+  actions_enabled           = "true"
+  treat_missing_data        = "breaching"
+  alarm_actions             = ["arn:aws:sns:us-east-1:171061125909:instance-idle-alert","arn:aws:automate:us-east-1:ec2:stop"]
+  ok_actions                = ["arn:aws:sns:us-east-1:171061125909:instance-idle-alert"]
+  dimensions {
+#     instanceid   = "${aws_instance.wf1.id}"
+#     instancename =	tf-inno-eastus1-dev-wf1
+  #    Name = "InstanceId"
+  #    Value   = "${aws_instance.wf1.id}"
+      InstanceId = "${aws_instance.wf1.id}"
+  }
+  #     alarm_actions = 2
+  #     alarm_actions = "arn:aws:sns:us-east-1:171061125909:instance-idle-alert"
+  #     alarm_actions = "arn:aws:automate:us-east-1:ec2:stop"
+  #     actions_enabled   = "true"
+  # }
+  alarm_description         = "Monitors ec2 cpu utilization for idle time"
+#  insufficient_data_actions = []
+}
+
+output "Instance " {
+  value = "${aws_instance.wf1.id}"
+}
