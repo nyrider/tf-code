@@ -128,7 +128,7 @@ resource "aws_instance" "wf1" {
 # End WorkFusion Instance ------------------------
 
 # Cloudwatch Alarm to stop instance after idle period -------------
-resource "aws_cloudwatch_metric_alarm" "foobar" {
+resource "aws_cloudwatch_metric_alarm" "cw_alarm1" {
   alarm_name                = "tf-nyp-useast1-stop after idle"
   comparison_operator       = "LessThanOrEqualToThreshold"
   evaluation_periods        = "3"
@@ -156,6 +156,187 @@ resource "aws_cloudwatch_metric_alarm" "foobar" {
   alarm_description         = "Monitors ec2 cpu utilization for idle time"
 #  insufficient_data_actions = []
 }
+
+# Create an CloudWatch event rule and targets to snapshot an instance when it is stopped ======
+resource "aws_cloudwatch_event_rule" "ec2stopped" {
+  name        = "snapshot-stopped-ec2-instance"
+  description = "Trigger a snapshot of the EBS volume associated to the EC2 Instance that is stopped"
+  role_arn = "${aws_iam_role.snapshot_permissions.arn}"
+  event_pattern = <<PATTERN
+{
+  "source": [
+    "aws.ec2"
+  ],
+  "detail-type": [
+    "EC2 Instance State-change Notification"
+  ],
+  "detail": {
+    "state": [
+      "stopped"
+    ],
+    "instance-id": [
+      "${aws_instance.wf1.id}"
+    ]
+  }
+}
+PATTERN
+}
+
+resource "aws_cloudwatch_event_target" "sns" {
+  rule      = "${aws_cloudwatch_event_rule.ec2stopped.name}"
+  target_id = "SendToSNS"
+  arn       = "arn:aws:sns:us-east-1:171061125909:instance-idle-alert"
+  input_transformer  {
+    input_template = <<EOF
+"The EC2 instance <instance> has changed state to <state>. A snapshot of the EBS volume will be created"
+EOF
+    input_paths = {
+      instance = "$.detail.instance-id"
+      state = "$.detail.state"
+    }
+  }
+}
+
+resource "aws_cloudwatch_event_target" "snap" {
+  rule      = "${aws_cloudwatch_event_rule.ec2stopped.name}"
+  target_id = "SnapshotEC2Stopped"
+  arn       = "arn:aws:automation:${var.region}:${var.account_id}:action/EBSCreateSnapshot/StoppedInstanceSnap"
+  input = "${jsonencode("arn:aws:ec2:${var.region}:${var.account_id}:volume/${aws_instance.wf1.root_block_device.0.volume_id}")}"
+#  role_arn = "${aws_iam_role.snapshot_permissions.arn}"
+}
+
+
+
+resource "aws_iam_role" "snapshot_permissions" {
+  name = "NYP_Snapshot_stopped_EC2_instance"
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": "sts:AssumeRole",
+      "Principal": {
+        "Service": "automation.amazonaws.com"
+      },
+      "Effect": "Allow",
+      "Sid": ""
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_policy" "snapshot_policy" {
+    name        = "example-snapshot-policy"
+    description = "grant ebs snapshot permissions to cloudwatch event rule"
+    policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "ec2:RebootInstances",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances",
+        "ec2:CreateSnapshot"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy_attachment" "snapshot_policy_attach" {
+    role       = "${aws_iam_role.snapshot_permissions.name}"
+    policy_arn = "${aws_iam_policy.snapshot_policy.arn}"
+}
+
+# End # Create an CloudWatch event rule and targets to snapshot an instance when it is stopped ======
+
+# Create policy to allow starting wf instance =============
+data "aws_iam_policy_document" "ec2_policy" {
+  statement {
+    sid = "tfec2start"
+
+    actions = [
+      "ec2:StartInstances",
+    ]
+
+    resources = [
+      "arn:aws:ec2:*:${var.account_id}:instance/*",
+    ]
+  }
+}
+#   "arn:aws:ec2:*:${var.account_id}:instance/${aws_instance.wf1.id}",
+
+
+resource "aws_iam_policy" "ec2_role_policy" {
+  name   = "${var.namePrefix}_start_wf_instance_policy"
+  path   = "/"
+  policy = "${data.aws_iam_policy_document.ec2_policy.json}"
+}
+
+resource "aws_iam_role" "ec2_role" {
+  name = "${var.namePrefix}_start_ec2_role"
+
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": "sts:AssumeRole",
+      "Principal": {
+        "Service": "ec2.amazonaws.com"
+      },
+      "Effect": "Allow",
+      "Sid": ""
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy_attachment" "test-attach" {
+    role       = "${aws_iam_role.ec2_role.name}"
+    policy_arn = "${aws_iam_policy.ec2_role_policy.arn}"
+}
+
+
+data "aws_iam_policy_document" "assume_policy" {
+  statement {
+    sid = "tfec2start"
+
+    actions = [
+      "sts:AssumeRole",
+    ]
+
+    resources = [
+      "${aws_iam_role.ec2_role.arn}",
+    ]
+  }
+}
+
+resource "aws_iam_policy" "assume_role_policy" {
+  name   = "${var.namePrefix}_assume_start_wf_instance_role"
+  path   = "/"
+  policy = "${data.aws_iam_policy_document.assume_policy.json}"
+}
+
+# End Create policy to allow starting wf instance =============
+
+
+
+
+
+
+
+
+
+
+
 
 output "Instance " {
   value = "${aws_instance.wf1.id}"
