@@ -1,7 +1,7 @@
 provider "aws" {
   region                  = "${var.region}"
   shared_credentials_file = "~/.aws/credentials"
-  profile                 = "default"
+  profile                 = "default-mlang"
 }
 
 
@@ -115,12 +115,13 @@ resource "aws_instance" "wf1" {
   ami           = "${var.ami}"
   instance_type = "m4.large"
   subnet_id     = "${module.vpc.private_subnets[0]}"
+  count = "${var.cnt}"
   vpc_security_group_ids = ["${aws_security_group.RDPBastion.id}","${aws_security_group.allow_all_outbound.id}"]
   root_block_device {
     delete_on_termination = "true"
   }
   tags {
-    Name = "${var.namePrefix}-wf1"
+    Name = "${var.namePrefix}-wf1-${count.index}"
     project = "${var.project}"
     environment = "${var.environment}"
   }
@@ -129,14 +130,15 @@ resource "aws_instance" "wf1" {
 
 # Cloudwatch Alarm to stop instance after idle period -------------
 resource "aws_cloudwatch_metric_alarm" "cw_alarm1" {
-  alarm_name                = "tf-nyp-useast1-stop after idle"
+  count = "${var.cnt}"
+  alarm_name                = "tf-nyp-useast1-stop after idle-${count.index}"
   comparison_operator       = "LessThanOrEqualToThreshold"
   evaluation_periods        = "3"
   metric_name               = "CPUUtilization"
   namespace                 = "AWS/EC2"
-  period                    = "300"
+  period                    = "60"
   statistic                 = "Average"
-  threshold                 = "5"
+  threshold                 = "10"
   actions_enabled           = "true"
   treat_missing_data        = "breaching"
   alarm_actions             = ["arn:aws:sns:us-east-1:171061125909:instance-idle-alert","arn:aws:automate:us-east-1:ec2:stop"]
@@ -146,7 +148,7 @@ resource "aws_cloudwatch_metric_alarm" "cw_alarm1" {
 #     instancename =	tf-inno-eastus1-dev-wf1
   #    Name = "InstanceId"
   #    Value   = "${aws_instance.wf1.id}"
-      InstanceId = "${aws_instance.wf1.id}"
+      InstanceId = "${element(aws_instance.wf1.*.id, count.index)}"#"${aws_instance.wf1.*.id}"
   }
   #     alarm_actions = 2
   #     alarm_actions = "arn:aws:sns:us-east-1:171061125909:instance-idle-alert"
@@ -156,31 +158,30 @@ resource "aws_cloudwatch_metric_alarm" "cw_alarm1" {
   alarm_description         = "Monitors ec2 cpu utilization for idle time"
 #  insufficient_data_actions = []
 }
+# End Cloudwatch Alarm to stop instance after idle period -------------
 
-# Create an CloudWatch event rule and targets to snapshot an instance when it is stopped ======
+
+# Create CloudWatch event rule and targets to snapshot an instance when it is stopped ======
+data "template_file" "event-pattern-template" {
+    template = "${file("../templates/eventpattern.tpl")}"
+#    vars {
+#        instanceid1= "${aws_instance.wf1.0.id}"
+#        instanceid2= "${aws_instance.wf1.1.id}"  #"${element(aws_instance.wf1.*.id, count.index)}"
+#    }
+    vars {
+      instanceid = "${replace( join(",", aws_instance.wf1.*.id), ",",  "\",\"")}"
+      # instanceid = "${join(",", aws_instance.wf1.*.id)}"
+    }
+}
+
 resource "aws_cloudwatch_event_rule" "ec2stopped" {
-  name        = "snapshot-stopped-ec2-instance"
+  name        = "${var.namePrefix}-snapshot-stopped-ec2-instance"
   description = "Trigger a snapshot of the EBS volume associated to the EC2 Instance that is stopped"
   role_arn = "${aws_iam_role.snapshot_permissions.arn}"
-  event_pattern = <<PATTERN
-{
-  "source": [
-    "aws.ec2"
-  ],
-  "detail-type": [
-    "EC2 Instance State-change Notification"
-  ],
-  "detail": {
-    "state": [
-      "stopped"
-    ],
-    "instance-id": [
-      "${aws_instance.wf1.id}"
-    ]
-  }
+  event_pattern = "${data.template_file.event-pattern-template.rendered}"
 }
-PATTERN
-}
+
+# "${aws_instance.wf1.id}",
 
 resource "aws_cloudwatch_event_target" "sns" {
   rule      = "${aws_cloudwatch_event_rule.ec2stopped.name}"
@@ -197,18 +198,36 @@ EOF
   }
 }
 
+# data "template_file" "example" {
+#   count = "${var.cnt}"
+#   template = "aws_instance.wf1.${count.index}.root_block_device.0.volume_id"
+# }
+
+data "aws_ebs_volume" "ebs_volume" {
+  count = "${var.cnt}"
+
+  filter {
+    name   = "attachment.instance-id"
+    values = ["${element(aws_instance.wf1.*.id, count.index)}"]
+  }
+}
+
+
 resource "aws_cloudwatch_event_target" "snap" {
+  count     = "${var.cnt}"
   rule      = "${aws_cloudwatch_event_rule.ec2stopped.name}"
-  target_id = "SnapshotEC2Stopped"
+  target_id = "SnapshotEC2Stopped-${count.index}"
   arn       = "arn:aws:automation:${var.region}:${var.account_id}:action/EBSCreateSnapshot/StoppedInstanceSnap"
-  input = "${jsonencode("arn:aws:ec2:${var.region}:${var.account_id}:volume/${aws_instance.wf1.root_block_device.0.volume_id}")}"
+  input = "${jsonencode("arn:aws:ec2:${var.region}:${var.account_id}:volume/${data.aws_ebs_volume.ebs_volume.*.id[count.index]}")}"
+#  input = "${jsonencode("arn:aws:ec2:${var.region}:${var.account_id}:volume/${aws_instance.wf1.0.root_block_device.0.volume_id}")}"
 #  role_arn = "${aws_iam_role.snapshot_permissions.arn}"
 }
 
 
 
+
 resource "aws_iam_role" "snapshot_permissions" {
-  name = "NYP_Snapshot_stopped_EC2_instance"
+  name = "${var.namePrefix}-snapshot-stopped-ec2-instance"
   assume_role_policy = <<EOF
 {
   "Version": "2012-10-17",
@@ -227,7 +246,7 @@ EOF
 }
 
 resource "aws_iam_policy" "snapshot_policy" {
-    name        = "example-snapshot-policy"
+    name        = "${var.namePrefix}-snapshot-policy"
     description = "grant ebs snapshot permissions to cloudwatch event rule"
     policy = <<EOF
 {
@@ -253,7 +272,6 @@ resource "aws_iam_role_policy_attachment" "snapshot_policy_attach" {
     role       = "${aws_iam_role.snapshot_permissions.name}"
     policy_arn = "${aws_iam_policy.snapshot_policy.arn}"
 }
-
 # End # Create an CloudWatch event rule and targets to snapshot an instance when it is stopped ======
 
 # Create policy to allow starting wf instance =============
@@ -263,40 +281,34 @@ data "aws_iam_policy_document" "ec2_policy" {
 
     actions = [
       "ec2:StartInstances",
+      "ec2:DescribeInstances",
     ]
 
     resources = [
-      "arn:aws:ec2:*:${var.account_id}:instance/*",
+      "arn:aws:ec2:${var.region}:${var.account_id}:instance/*",
     ]
   }
 }
 #   "arn:aws:ec2:*:${var.account_id}:instance/${aws_instance.wf1.id}",
-
+# "arn:aws:ec2:*:${var.account_id}:instance/${aws_instance.wf1.*.id[0]}",
 
 resource "aws_iam_policy" "ec2_role_policy" {
-  name   = "${var.namePrefix}_start_wf_instance_policy"
+  name   = "${var.namePrefix}-start-wf-instance_policy"
   path   = "/"
   policy = "${data.aws_iam_policy_document.ec2_policy.json}"
 }
 
-resource "aws_iam_role" "ec2_role" {
-  name = "${var.namePrefix}_start_ec2_role"
-
-  assume_role_policy = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Action": "sts:AssumeRole",
-      "Principal": {
-        "Service": "ec2.amazonaws.com"
-      },
-      "Effect": "Allow",
-      "Sid": ""
+data "template_file" "assume-policy-template" {
+    template = "${file("../templates/assumerole.tpl")}"
+    vars {
+        account = "${var.account_id}"
     }
-  ]
 }
-EOF
+
+resource "aws_iam_role" "ec2_role" {
+  name = "${var.namePrefix}-start-wf-role"
+
+  assume_role_policy = "${data.template_file.assume-policy-template.rendered}"
 }
 
 resource "aws_iam_role_policy_attachment" "test-attach" {
@@ -320,25 +332,63 @@ data "aws_iam_policy_document" "assume_policy" {
 }
 
 resource "aws_iam_policy" "assume_role_policy" {
-  name   = "${var.namePrefix}_assume_start_wf_instance_role"
+  name   = "${var.namePrefix}-assume-start-wf-instance_role"
   path   = "/"
   policy = "${data.aws_iam_policy_document.assume_policy.json}"
 }
 
+data "aws_iam_policy_document" "temp_ec2_policy" {
+  statement {
+    sid = "tfec2start3"
+
+    actions = [
+      "sts:AssumeRole",
+    ]
+
+    resources = [
+      "arn:aws:iam::${var.account_id}:role/tf-inno-eastus1-dev_developer",
+    ]
+  }
+}
+# ${aws_instance.wf1.id}
+
+resource "aws_iam_policy" "ec2_user_role_policy" {
+  name   = "${var.namePrefix}-assume-user-role"
+  path   = "/"
+  policy = "${data.aws_iam_policy_document.temp_ec2_policy.json}"
+}
 # End Create policy to allow starting wf instance =============
 
-
-
-
-
-
-
-
-
-
-
-
-output "Instance " {
-  value = "${aws_instance.wf1.id}"
+# Create IAM user and associate policy to let them assume role
+resource "aws_iam_user" "iu" {
+  name = "inno2"
 }
-# End Cloudwatch Alarm to stop instance after idle period -------------
+
+resource "aws_iam_access_key" "uikey" {
+  user = "${aws_iam_user.iu.name}"
+}
+
+resource "aws_iam_user_policy_attachment" "test-attach" {
+    user       = "${aws_iam_user.iu.name}"
+    policy_arn = "${aws_iam_policy.ec2_user_role_policy.arn}"
+}
+# End Create IAM user and associate policy to let them assume role
+
+
+# Outputs -----------------------------------------------------------
+output "Instances: " {
+  value = "${aws_instance.wf1.*.id}"
+}
+
+output "iuaccess: " {
+  value = "${aws_iam_access_key.uikey.id}"
+}
+
+output "iusecret: " {
+  value = "${aws_iam_access_key.uikey.secret}"
+}
+
+output "data-test: " {
+  value = "${data.aws_ebs_volume.ebs_volume.*.id}"
+}
+# End Outputs -----------------------------------------------------------
