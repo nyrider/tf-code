@@ -121,7 +121,7 @@ resource "aws_instance" "wf1" {
     delete_on_termination = "true"
   }
   tags {
-    Name = "${var.namePrefix}-wf1-${count.index}"
+    Name = "${var.namePrefix}-wf-${count.index}"
     project = "${var.project}"
     environment = "${var.environment}"
   }
@@ -277,15 +277,21 @@ resource "aws_iam_role_policy_attachment" "snapshot_policy_attach" {
 # Create policy to allow starting wf instance =============
 data "aws_iam_policy_document" "ec2_policy" {
   statement {
-    sid = "tfec2start"
-
+    sid = "tfec2start0"
     actions = [
       "ec2:StartInstances",
-      "ec2:DescribeInstances",
     ]
-
     resources = [
       "arn:aws:ec2:${var.region}:${var.account_id}:instance/*",
+    ]
+  }
+  statement {
+    sid = "tfec2start1"
+    actions = [
+      "ec2:DescribeInstances",
+    ]
+    resources = [
+      "*",
     ]
   }
 }
@@ -346,12 +352,12 @@ data "aws_iam_policy_document" "temp_ec2_policy" {
     ]
 
     resources = [
-      "arn:aws:iam::${var.account_id}:role/tf-inno-eastus1-dev_developer",
+      "arn:aws:iam::171061125909:role/tf-inno-eastus1-dev-start-wf-role",
     ]
   }
 }
 # ${aws_instance.wf1.id}
-
+#      "arn:aws:iam::${var.account_id}:role/tf-inno-eastus1-dev_developer",
 resource "aws_iam_policy" "ec2_user_role_policy" {
   name   = "${var.namePrefix}-assume-user-role"
   path   = "/"
