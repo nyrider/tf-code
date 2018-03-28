@@ -13,7 +13,9 @@ variable "region" {
 	default = "us-east-1"
 }
 
-
+variable "account_id" {
+	default = "171061125909"
+}
 variable "username" {
 	default = "adminuser"
 }

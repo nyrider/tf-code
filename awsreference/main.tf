@@ -8,7 +8,7 @@ provider "aws" {
 
 # VPC ----------------
 module "vpc" {
-  source = "github.com/terraform-aws-modules/terraform-aws-vpc.git" # "github.com/terraform-community-modules/tf_aws_vpc"
+  source = "github.com/terraform-aws-modules/terraform-aws-vpc.git"
    name = "${var.namePrefix}-vpc"
    cidr = "10.0.0.0/22"
    public_subnets  = ["10.0.0.0/26","10.0.0.64/26"]
@@ -110,16 +110,31 @@ resource "aws_instance" "bastion_host" {
 }
 # End Bastion Host-----------------------------
 
+
+# Start File Template for user data for WF Instance ---------
+data "template_file" "userdata" {
+    count = "${var.cnt}"
+    template = "${file("../templates/user_data.tpl")}"
+    vars {
+        host_name = "inno-rpa-dev-${count.index}"
+    }
+}
+# End File Template for user data for WF Instance ---------
+
+
 # WorkFusion Instance ------------------------
 resource "aws_instance" "wf1" {
   ami           = "${var.ami}"
-  instance_type = "m4.large"
+#  instance_type = "m4.large"
+  instance_type = "t2.medium"
   subnet_id     = "${module.vpc.private_subnets[0]}"
   count = "${var.cnt}"
   vpc_security_group_ids = ["${aws_security_group.RDPBastion.id}","${aws_security_group.allow_all_outbound.id}"]
   root_block_device {
     delete_on_termination = "true"
   }
+#  user_data = "${file("../templates/user_data")}"
+  user_data = "${data.template_file.userdata.*.rendered[count.index]}"
   tags {
     Name = "${var.namePrefix}-wf-${count.index}"
     project = "${var.project}"
@@ -136,7 +151,7 @@ resource "aws_cloudwatch_metric_alarm" "cw_alarm1" {
   evaluation_periods        = "3"
   metric_name               = "CPUUtilization"
   namespace                 = "AWS/EC2"
-  period                    = "60"
+  period                    = "900"
   statistic                 = "Average"
   threshold                 = "10"
   actions_enabled           = "true"
@@ -163,28 +178,33 @@ resource "aws_cloudwatch_metric_alarm" "cw_alarm1" {
 
 # Create CloudWatch event rule and targets to snapshot an instance when it is stopped ======
 data "template_file" "event-pattern-template" {
+    count = "${var.cnt}"
     template = "${file("../templates/eventpattern.tpl")}"
 #    vars {
 #        instanceid1= "${aws_instance.wf1.0.id}"
 #        instanceid2= "${aws_instance.wf1.1.id}"  #"${element(aws_instance.wf1.*.id, count.index)}"
 #    }
     vars {
-      instanceid = "${replace( join(",", aws_instance.wf1.*.id), ",",  "\",\"")}"
+      instanceid = "${element(aws_instance.wf1.*.id, count.index)}"
+      #instanceid = "${replace( join(",", aws_instance.wf1.*.id), ",",  "\",\"")}"
       # instanceid = "${join(",", aws_instance.wf1.*.id)}"
     }
 }
 
 resource "aws_cloudwatch_event_rule" "ec2stopped" {
-  name        = "${var.namePrefix}-snapshot-stopped-ec2-instance"
+  count = "${var.cnt}"
+  name        = "${var.namePrefix}-snapshot-stopped-ec2-instance-${count.index}"
   description = "Trigger a snapshot of the EBS volume associated to the EC2 Instance that is stopped"
   role_arn = "${aws_iam_role.snapshot_permissions.arn}"
-  event_pattern = "${data.template_file.event-pattern-template.rendered}"
+  # event_pattern = "${data.template_file.event-pattern-template.rendered}"
+  event_pattern = "${data.template_file.event-pattern-template.*.rendered[count.index]}"
 }
 
 # "${aws_instance.wf1.id}",
 
 resource "aws_cloudwatch_event_target" "sns" {
-  rule      = "${aws_cloudwatch_event_rule.ec2stopped.name}"
+  count = "${var.cnt}"
+  rule      = "${element(aws_cloudwatch_event_rule.ec2stopped.*.name, count.index)}"
   target_id = "SendToSNS"
   arn       = "arn:aws:sns:us-east-1:171061125909:instance-idle-alert"
   input_transformer  {
@@ -215,7 +235,7 @@ data "aws_ebs_volume" "ebs_volume" {
 
 resource "aws_cloudwatch_event_target" "snap" {
   count     = "${var.cnt}"
-  rule      = "${aws_cloudwatch_event_rule.ec2stopped.name}"
+  rule      = "${element(aws_cloudwatch_event_rule.ec2stopped.*.name, count.index)}"
   target_id = "SnapshotEC2Stopped-${count.index}"
   arn       = "arn:aws:automation:${var.region}:${var.account_id}:action/EBSCreateSnapshot/StoppedInstanceSnap"
   input = "${jsonencode("arn:aws:ec2:${var.region}:${var.account_id}:volume/${data.aws_ebs_volume.ebs_volume.*.id[count.index]}")}"
